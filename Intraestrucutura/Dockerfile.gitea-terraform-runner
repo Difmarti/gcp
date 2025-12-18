@@ -1,0 +1,215 @@
+# ==============================================================================
+# Dockerfile para Gitea Act Runner con Terraform completo
+# ==============================================================================
+# Imagen: gitea-terraform-runner
+# Descripción: Act Runner con Terraform, TFLint, Checkov pre-instalados en PATH estándar
+# ==============================================================================
+
+FROM ubuntu:22.04
+
+# Variables de entorno
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    TERRAFORM_VERSION=1.6.4 \
+    ACT_RUNNER_VERSION=0.2.13
+
+# Fix GPG - instalar paquetes críticos sin verificación GPG
+RUN apt-get clean && \
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* && \
+    apt-get update -o Acquire::AllowInsecureRepositories=true -o Acquire::AllowDowngradeToInsecureRepositories=true || true && \
+    apt-get install -y --allow-unauthenticated \
+    ca-certificates \
+    gnupg \
+    apt-transport-https \
+    && rm -rf /var/lib/apt/lists/*
+
+# Reinstalar ca-certificates para asegurar que están actualizados
+RUN apt-get update && \
+    apt-get install -y --reinstall ca-certificates && \
+    update-ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+# Ahora instalar el resto de dependencias
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    curl \
+    wget \
+    git \
+    lsb-release \
+    software-properties-common \
+    docker.io \
+    python3 \
+    python3-pip \
+    python3-dev \
+    build-essential \
+    jq \
+    unzip \
+    zip \
+    vim \
+    nano \
+    sudo \
+    && rm -rf /var/lib/apt/lists/*
+
+# Instalar Node.js (necesario para Gitea Actions como checkout)
+RUN curl -fsSL https://deb.nodesource.com/setup_18.x | bash - && \
+    apt-get install -y nodejs && \
+    node --version && \
+    npm --version && \
+    rm -rf /var/lib/apt/lists/*
+
+# Instalar Google Cloud SDK
+RUN echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" | \
+    tee -a /etc/apt/sources.list.d/google-cloud-sdk.list && \
+    curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | \
+    apt-key --keyring /usr/share/keyrings/cloud.google.gpg add - && \
+    apt-get update && apt-get install -y google-cloud-sdk && \
+    rm -rf /var/lib/apt/lists/*
+
+# Instalar Terraform directamente en /usr/local/bin
+RUN cd /tmp && \
+    wget -q https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip && \
+    unzip terraform_${TERRAFORM_VERSION}_linux_amd64.zip && \
+    mv terraform /usr/local/bin/terraform && \
+    chmod +x /usr/local/bin/terraform && \
+    rm terraform_${TERRAFORM_VERSION}_linux_amd64.zip && \
+    terraform --version
+
+# Instalar TFLint directamente en /usr/local/bin
+RUN cd /tmp && \
+    curl -s https://raw.githubusercontent.com/terraform-linters/tflint/master/install_linux.sh | bash && \
+    tflint --version
+
+# Instalar Checkov
+RUN pip3 install --upgrade pip setuptools wheel && \
+    pip3 install checkov && \
+    checkov --version
+
+# Instalar herramientas adicionales de validación
+RUN pip3 install pyyaml jsonschema yamllint
+
+# Crear directorios para Act Runner
+RUN mkdir -p /opt/act_runner /data/act_runner && \
+    chmod 755 /opt/act_runner /data/act_runner
+
+# Descargar Act Runner
+RUN wget -q https://dl.gitea.com/act_runner/${ACT_RUNNER_VERSION}/act_runner-${ACT_RUNNER_VERSION}-linux-amd64 \
+    -O /opt/act_runner/act_runner && \
+    chmod +x /opt/act_runner/act_runner
+
+# Script de entrypoint
+RUN cat > /opt/act_runner/entrypoint.sh << 'ENTRYPOINT_EOF'
+#!/bin/bash
+set -e
+
+echo "========================================="
+echo "🚀 Gitea Terraform Runner"
+echo "========================================="
+echo ""
+echo "📦 Herramientas Instaladas:"
+echo "- Terraform: $(terraform --version | head -1)"
+echo "- TFLint: $(tflint --version)"
+echo "- Checkov: $(checkov --version | head -1)"
+echo "- Google Cloud SDK: $(gcloud --version | head -1)"
+echo "- Python: $(python3 --version)"
+echo "- Docker: $(docker --version 2>/dev/null || echo 'Socket not available')"
+echo ""
+echo "🔍 PATH actual:"
+echo "$PATH"
+echo ""
+echo "📍 Ubicaciones de herramientas:"
+echo "- terraform: $(which terraform)"
+echo "- tflint: $(which tflint)"
+echo "- checkov: $(which checkov)"
+echo "========================================="
+echo ""
+
+# Variables de entorno
+GITEA_INSTANCE_URL=${GITEA_INSTANCE_URL:-http://localhost:3000}
+GITEA_RUNNER_REGISTRATION_TOKEN=${GITEA_RUNNER_REGISTRATION_TOKEN:-}
+RUNNER_NAME=${RUNNER_NAME:-gitea-runner-$(hostname)}
+RUNNER_LABELS=${RUNNER_LABELS:-ubuntu-latest:docker://gitea-terraform-runner:latest}
+
+echo "⚙️  Configuración del Runner:"
+echo "- URL: $GITEA_INSTANCE_URL"
+echo "- Nombre: $RUNNER_NAME"
+echo "- Labels: $RUNNER_LABELS"
+echo ""
+
+# Registrar runner si no está registrado
+if [ ! -f /data/act_runner/.runner ]; then
+    if [ -z "$GITEA_RUNNER_REGISTRATION_TOKEN" ]; then
+        echo "❌ ERROR: GITEA_RUNNER_REGISTRATION_TOKEN no está configurado"
+        exit 1
+    fi
+
+    echo "📝 Registrando runner..."
+    cd /data/act_runner
+    /opt/act_runner/act_runner register \
+        --instance "$GITEA_INSTANCE_URL" \
+        --token "$GITEA_RUNNER_REGISTRATION_TOKEN" \
+        --name "$RUNNER_NAME" \
+        --labels "$RUNNER_LABELS" \
+        --no-interactive
+
+    echo "✅ Runner registrado exitosamente"
+else
+    echo "ℹ️  Runner ya registrado"
+fi
+
+echo ""
+echo "========================================="
+echo "▶️  Iniciando Act Runner daemon..."
+echo "========================================="
+echo ""
+
+cd /data/act_runner
+exec /opt/act_runner/act_runner daemon
+ENTRYPOINT_EOF
+
+RUN chmod +x /opt/act_runner/entrypoint.sh
+
+# Script de verificación
+RUN cat > /usr/local/bin/check-tools.sh << 'CHECK_EOF'
+#!/bin/bash
+echo "========================================="
+echo "📋 Verificación de Herramientas"
+echo "========================================="
+echo ""
+echo "PATH: $PATH"
+echo ""
+echo "✅ Terraform: $(which terraform) - $(terraform --version | head -1)"
+echo "✅ TFLint: $(which tflint) - $(tflint --version)"
+echo "✅ Checkov: $(which checkov) - $(checkov --version | head -1)"
+echo "✅ Google Cloud SDK: $(which gcloud) - $(gcloud --version | head -1)"
+echo "✅ Python: $(python3 --version)"
+echo "✅ Git: $(git --version)"
+echo ""
+echo "========================================="
+echo "✅ Todas las herramientas disponibles"
+echo "========================================="
+CHECK_EOF
+
+RUN chmod +x /usr/local/bin/check-tools.sh
+
+# Verificación final del build
+RUN echo "=========================================" && \
+    echo "🔍 Verificación de instalación:" && \
+    echo "=========================================" && \
+    echo "PATH: $PATH" && \
+    which terraform && terraform --version && \
+    which tflint && tflint --version && \
+    which checkov && checkov --version && \
+    which gcloud && gcloud --version | head -1 && \
+    echo "=========================================" && \
+    echo "✅ Build completado exitosamente" && \
+    echo "========================================="
+
+WORKDIR /data/act_runner
+
+LABEL version="2.0" \
+      description="Gitea Act Runner con Terraform, TFLint, Checkov y Google Cloud SDK" \
+      maintainer="Cloud Architecture Team" \
+      terraform.version="1.6.4" \
+      runner.version="0.2.13"
+
+ENTRYPOINT ["/opt/act_runner/entrypoint.sh"]

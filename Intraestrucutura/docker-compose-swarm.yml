@@ -1,0 +1,84 @@
+version: '3.8'
+
+services:
+  gitea-terraform-runner-1:
+    image: gitea-terraform-runner:latest
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      placement:
+        constraints:
+          - node.role == manager
+    volumes:
+      - gitea_runner_data_1:/data/act_runner
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - GITEA_INSTANCE_URL=${GITEA_INSTANCE_URL:-http://10.30.90.102:3000}
+      - GITEA_RUNNER_REGISTRATION_TOKEN=${GITEA_RUNNER_TOKEN}
+      - RUNNER_NAME=${RUNNER_NAME_1:-gitea-terraform-runner-1}
+      - RUNNER_LABELS=${RUNNER_LABELS:-ubuntu-latest:docker://gitea-terraform-runner:latest,terraform:docker://gitea-terraform-runner:latest}
+      - LOG_LEVEL=info
+    networks:
+      - gitea_network
+
+  gitea-terraform-runner-2:
+    image: gitea-terraform-runner:latest
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      placement:
+        constraints:
+          - node.role == manager
+    volumes:
+      - gitea_runner_data_2:/data/act_runner
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - GITEA_INSTANCE_URL=${GITEA_INSTANCE_URL:-http://10.30.90.102:3000}
+      - GITEA_RUNNER_REGISTRATION_TOKEN=${GITEA_RUNNER_TOKEN}
+      - RUNNER_NAME=${RUNNER_NAME_2:-gitea-terraform-runner-2}
+      - RUNNER_LABELS=${RUNNER_LABELS:-ubuntu-latest:docker://gitea-terraform-runner:latest,terraform:docker://gitea-terraform-runner:latest}
+      - LOG_LEVEL=info
+    networks:
+      - gitea_network
+
+  gitea-terraform-runner-3:
+    image: gitea-terraform-runner:latest
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      placement:
+        constraints:
+          - node.role == manager
+    volumes:
+      - gitea_runner_data_3:/data/act_runner
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - GITEA_INSTANCE_URL=${GITEA_INSTANCE_URL:-http://10.30.90.102:3000}
+      - GITEA_RUNNER_REGISTRATION_TOKEN=${GITEA_RUNNER_TOKEN}
+      - RUNNER_NAME=${RUNNER_NAME_3:-gitea-terraform-runner-3}
+      - RUNNER_LABELS=${RUNNER_LABELS:-ubuntu-latest:docker://gitea-terraform-runner:latest,terraform:docker://gitea-terraform-runner:latest}
+      - LOG_LEVEL=info
+    networks:
+      - gitea_network
+
+volumes:
+  gitea_runner_data_1:
+    driver: local
+  gitea_runner_data_2:
+    driver: local
+  gitea_runner_data_3:
+    driver: local
+
+networks:
+  gitea_network:
+    driver: overlay
+    attachable: true

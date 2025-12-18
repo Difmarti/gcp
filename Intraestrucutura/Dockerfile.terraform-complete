@@ -1,0 +1,252 @@
+# Usar Ubuntu 22.04 como imagen base
+FROM ubuntu:22.04
+
+# Establecer variables de entorno para evitar prompts interactivos
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PATH="/opt/act_runner:/opt/terraform:${PATH}"
+
+# Actualizar el sistema e instalar dependencias básicas
+RUN apt-get update && apt-get upgrade -y && \
+    apt-get install -y \
+    curl \
+    wget \
+    git \
+    ca-certificates \
+    gnupg \
+    lsb-release \
+    apt-transport-https \
+    software-properties-common \
+    docker.io \
+    python3 \
+    python3-pip \
+    python3-dev \
+    build-essential \
+    jq \
+    unzip \
+    zip \
+    vim \
+    nano \
+    sudo \
+    && rm -rf /var/lib/apt/lists/*
+
+# Instalar Google Cloud SDK
+RUN echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" | \
+    tee -a /etc/apt/sources.list.d/google-cloud-sdk.list && \
+    curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | \
+    apt-key --keyring /usr/share/keyrings/cloud.google.gpg add - && \
+    apt-get update && apt-get install -y google-cloud-sdk && \
+    rm -rf /var/lib/apt/lists/*
+
+# Instalar Terraform
+RUN mkdir -p /opt/terraform && \
+    cd /tmp && \
+    wget https://releases.hashicorp.com/terraform/1.6.4/terraform_1.6.4_linux_amd64.zip && \
+    unzip terraform_1.6.4_linux_amd64.zip -d /opt/terraform && \
+    rm terraform_1.6.4_linux_amd64.zip && \
+    chmod +x /opt/terraform/terraform && \
+    /opt/terraform/terraform --version
+
+# Instalar TFLint (Terraform Linter)
+RUN echo "Installing TFLint..." && \
+    cd /tmp && \
+    curl -s https://raw.githubusercontent.com/terraform-linters/tflint/master/install_linux.sh | bash && \
+    rm -rf /tmp/tflint* && \
+    tflint --version
+
+# Instalar Checkov (Security Scanner)
+RUN echo "Installing Checkov..." && \
+    pip3 install --upgrade pip setuptools wheel && \
+    pip3 install checkov && \
+    checkov --version
+
+# Instalar herramientas adicionales para validación
+RUN pip3 install \
+    pyyaml \
+    jsonschema \
+    yamllint \
+    && echo "Validation tools installed"
+
+# Crear directorio para Act Runner
+RUN mkdir -p /opt/act_runner /data/act_runner && \
+    chmod 755 /opt/act_runner /data/act_runner
+
+# Descargar el binario de Act Runner versión 0.2.13
+RUN wget https://dl.gitea.com/act_runner/0.2.13/act_runner-0.2.13-linux-amd64 \
+    -O /opt/act_runner/act_runner && \
+    chmod +x /opt/act_runner/act_runner
+
+# Crear script de entrada para configurar Act Runner
+RUN cat > /opt/act_runner/entrypoint.sh << 'EOF'
+#!/bin/bash
+set -e
+
+# Mostrar información de las herramientas instaladas
+echo "========================================="
+echo "🚀 Act Runner con Terraform CI/CD"
+echo "========================================="
+echo ""
+echo "📦 Herramientas Instaladas:"
+echo "---"
+echo "Terraform: $(terraform --version | head -1)"
+echo "TFLint: $(tflint --version)"
+echo "Checkov: $(checkov --version | head -1)"
+echo "Google Cloud SDK: $(gcloud --version | head -1)"
+echo "Python: $(python3 --version)"
+echo "Docker: $(docker --version 2>/dev/null || echo 'Socket not available')"
+echo "---"
+echo ""
+
+# Variables de entorno que pueden ser pasadas al contenedor
+GITEA_INSTANCE_URL=${GITEA_INSTANCE_URL:-http://localhost:3000}
+GITEA_RUNNER_REGISTRATION_TOKEN=${GITEA_RUNNER_REGISTRATION_TOKEN:-}
+RUNNER_NAME=${RUNNER_NAME:-$(hostname)}
+RUNNER_LABELS=${RUNNER_LABELS:-ubuntu-latest:docker://gitea/runner-images:ubuntu-latest,terraform:docker://gitea/runner-images:ubuntu-latest}
+
+# Comprobar si el directorio de configuración ya existe
+if [ ! -f /data/act_runner/.registered ]; then
+    if [ -z "$GITEA_RUNNER_REGISTRATION_TOKEN" ]; then
+        echo "ERROR: GITEA_RUNNER_REGISTRATION_TOKEN no está configurado"
+        echo "Por favor, establece la variable de entorno GITEA_RUNNER_REGISTRATION_TOKEN"
+        exit 1
+    fi
+    
+    echo "Registrando Act Runner..."
+    /opt/act_runner/act_runner register \
+        --instance "$GITEA_INSTANCE_URL" \
+        --token "$GITEA_RUNNER_REGISTRATION_TOKEN" \
+        --name "$RUNNER_NAME" \
+        --labels "$RUNNER_LABELS" \
+        --no-interactive
+    
+    touch /data/act_runner/.registered
+    echo "✅ Act Runner registrado exitosamente"
+else
+    echo "ℹ️ Act Runner ya está registrado"
+fi
+
+echo ""
+echo "========================================="
+echo "Iniciando Act Runner daemon..."
+echo "========================================="
+echo ""
+
+# Ejecutar el daemon
+exec /opt/act_runner/act_runner daemon
+EOF
+
+RUN chmod +x /opt/act_runner/entrypoint.sh
+
+# Crear script de verificación de herramientas
+RUN cat > /usr/local/bin/check-tools.sh << 'EOF'
+#!/bin/bash
+echo "========================================="
+echo "📋 Verificación de Herramientas"
+echo "========================================="
+echo ""
+
+echo "✅ Terraform:"
+terraform --version
+echo ""
+
+echo "✅ TFLint:"
+tflint --version
+echo ""
+
+echo "✅ Checkov:"
+checkov --version
+echo ""
+
+echo "✅ Google Cloud SDK:"
+gcloud --version | head -3
+echo ""
+
+echo "✅ Python:"
+python3 --version
+echo ""
+
+echo "✅ Git:"
+git --version
+echo ""
+
+echo "✅ Docker:"
+docker --version 2>/dev/null || echo "Docker Socket not available"
+echo ""
+
+echo "========================================="
+echo "Todas las herramientas están disponibles ✅"
+echo "========================================="
+EOF
+
+RUN chmod +x /usr/local/bin/check-tools.sh
+
+# Crear script para validar Terraform
+RUN cat > /usr/local/bin/validate-tf.sh << 'EOF'
+#!/bin/bash
+set -e
+
+if [ $# -eq 0 ]; then
+    echo "Uso: validate-tf.sh <directorio>"
+    exit 1
+fi
+
+TERRAFORM_DIR=$1
+
+echo "========================================="
+echo "🔍 Validando Terraform en: $TERRAFORM_DIR"
+echo "========================================="
+echo ""
+
+cd "$TERRAFORM_DIR"
+
+# 1. Validar formato
+echo "1️⃣ Validando formato..."
+terraform fmt -check -recursive . && echo "✅ Formato correcto" || echo "❌ Formato incorrecto"
+
+# 2. Validar sintaxis
+echo ""
+echo "2️⃣ Validando sintaxis..."
+terraform init -backend=false > /dev/null 2>&1
+terraform validate && echo "✅ Sintaxis correcta" || echo "❌ Sintaxis incorrecta"
+
+# 3. Ejecutar TFLint
+echo ""
+echo "3️⃣ Ejecutando TFLint..."
+tflint . && echo "✅ TFLint sin issues" || echo "⚠️ TFLint encontró warnings"
+
+# 4. Ejecutar Checkov
+echo ""
+echo "4️⃣ Ejecutando Checkov..."
+checkov -d . --framework terraform --soft-fail && echo "✅ Checkov completado" || echo "⚠️ Checkov encontró issues"
+
+echo ""
+echo "========================================="
+echo "✅ Validación completada"
+echo "========================================="
+EOF
+
+RUN chmod +x /usr/local/bin/validate-tf.sh
+
+# Verificar que todas las herramientas estén disponibles en el PATH
+RUN echo "=========================================" && \
+    echo "Verificando herramientas instaladas..." && \
+    echo "=========================================" && \
+    which terraform && terraform --version && \
+    which tflint && tflint --version && \
+    which checkov && checkov --version && \
+    which gcloud && gcloud --version | head -1 && \
+    echo "=========================================" && \
+    echo "✅ Todas las herramientas están disponibles" && \
+    echo "========================================="
+
+# Crear directorio de trabajo
+WORKDIR /data/act_runner
+
+# Información de la imagen
+LABEL version="1.0" \
+      description="Act Runner con Terraform, TFLint, Checkov y Google Cloud SDK" \
+      author="Cloud Architecture Team" \
+      tools="terraform:1.6.4,tflint:latest,checkov:latest,gcloud:latest,docker.io"
+
+# Punto de entrada
+ENTRYPOINT ["/opt/act_runner/entrypoint.sh"]

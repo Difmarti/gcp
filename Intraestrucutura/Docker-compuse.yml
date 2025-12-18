@@ -1,0 +1,73 @@
+version: '3.8'
+
+services:
+  act_runner-terraform-1:
+    image: terraform-runner:latest
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      placement:
+        constraints: [node.role == manager]
+    volumes:
+      - /docker/gitea/runner/gcp/act_runner_data:/data/act_runner
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - GITEA_INSTANCE_URL=http://${GITEA_RUNNER_IP}:3000
+      - GITEA_RUNNER_REGISTRATION_TOKEN=${GITEA_RUNNER_TOKEN}
+      - RUNNER_NAME=act-runner-terraform-1
+      - RUNNER_LABELS=ubuntu-latest:docker://terraform-runner:latest,terraform:docker://terraform-runner:latest
+      - LOG_LEVEL=info
+    networks:
+      - gitea_overlay_network
+
+  act_runner-terraform-2:
+    image: terraform-runner:latest
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      placement:
+        constraints: [node.role == manager]
+    volumes:
+      - /docker/gitea/runner/gcp/act_runner_data:/data/act_runner
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - GITEA_INSTANCE_URL=http://${GITEA_RUNNER_IP}:3000
+      - GITEA_RUNNER_REGISTRATION_TOKEN=${GITEA_RUNNER_TOKEN}
+      - RUNNER_NAME=act-runner-terraform-2
+      - RUNNER_LABELS=ubuntu-latest:docker://terraform-runner:latest,terraform:docker://terraform-runner:latest
+      - LOG_LEVEL=info
+    networks:
+      - gitea_overlay_network
+  act_runner-terraform-3:
+    image: terraform-runner:latest
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      placement:
+        constraints: [node.role == manager]
+    volumes:
+      - /docker/gitea/runner/gcp/act_runner_data:/data/act_runner
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - GITEA_INSTANCE_URL=http://${GITEA_RUNNER_IP}:3000
+      - GITEA_RUNNER_REGISTRATION_TOKEN=${GITEA_RUNNER_TOKEN}
+      - RUNNER_NAME=act-runner-terraform-3
+      - RUNNER_LABELS=ubuntu-latest:docker://terraform-runner:latest,terraform:docker://terraform-runner:latest
+      - LOG_LEVEL=info
+    networks:
+      - gitea_overlay_network
+
+networks:
+  gitea_overlay_network:
+    driver: overlay
+    driver_opts:
+      com.docker.network.driver.overlay.vxlanid: 4095
